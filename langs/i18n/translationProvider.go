@@ -35,6 +35,8 @@ import (
 	"github.com/gohugoio/hugo/source"
 )
 
+type setOfLanguagesWithTranslationFile map[string]struct{}
+
 // TranslationProvider provides translation handling, i.e. loading
 // of bundles etc.
 type TranslationProvider struct {
@@ -59,6 +61,7 @@ func (tp *TranslationProvider) NewResource(dst *deps.Deps) error {
 	bundle.RegisterUnmarshalFunc("yml", metadecoders.UnmarshalYaml)
 	bundle.RegisterUnmarshalFunc("json", json.Unmarshal)
 
+	setOfLangWithTransFile := make(setOfLanguagesWithTranslationFile)
 	w := hugofs.NewWalkway(
 		hugofs.WalkwayConfig{
 			Fs:         dst.BaseFs.I18n.Fs,
@@ -68,7 +71,7 @@ func (tp *TranslationProvider) NewResource(dst *deps.Deps) error {
 				if info.IsDir() {
 					return nil
 				}
-				return addTranslationFile(bundle, source.NewFileInfo(info))
+				return addTranslationFile(bundle, source.NewFileInfo(info), setOfLangWithTransFile)
 			},
 		})
 
@@ -76,16 +79,16 @@ func (tp *TranslationProvider) NewResource(dst *deps.Deps) error {
 		return err
 	}
 
-	tp.t = NewTranslator(bundle, dst.Conf, dst.Log)
+	tp.t = NewTranslator(bundle, dst.Conf, dst.Log, setOfLangWithTransFile)
 
-	dst.Translate = tp.t.Func(dst.Conf.Language().(*langs.Language).Lang)
+	dst.Translate = tp.getTranslateFunc(dst)
 
 	return nil
 }
 
 const artificialLangTagPrefix = "art-x-"
 
-func addTranslationFile(bundle *i18n.Bundle, r *source.File) error {
+func addTranslationFile(bundle *i18n.Bundle, r *source.File, setOfLangWithTransFile setOfLanguagesWithTranslationFile) error {
 	f, err := r.FileInfo().Meta().Open()
 	if err != nil {
 		return fmt.Errorf("failed to open translations file %q:: %w", r.LogicalName(), err)
@@ -97,6 +100,7 @@ func addTranslationFile(bundle *i18n.Bundle, r *source.File) error {
 	name := r.LogicalName()
 	lang := paths.Filename(name)
 	tag := language.Make(lang)
+	setOfLangWithTransFile[tag.String()] = struct{}{}
 	if tag == language.Und {
 		try := artificialLangTagPrefix + lang
 		_, err = language.Parse(try)
@@ -128,8 +132,22 @@ func addTranslationFile(bundle *i18n.Bundle, r *source.File) error {
 
 // CloneResource sets the language func for the new language.
 func (tp *TranslationProvider) CloneResource(dst, src *deps.Deps) error {
-	dst.Translate = tp.t.Func(dst.Conf.Language().(*langs.Language).Lang)
+	dst.Translate = tp.getTranslateFunc(dst)
 	return nil
+}
+
+// getTranslateFunc returns the translation function for the language in Deps
+func (tp *TranslationProvider) getTranslateFunc(dst *deps.Deps) func(ctx context.Context, translationID string, templateData any) string {
+	lang := dst.Conf.Language().(*langs.Language)
+	langKey := lang.Lang
+
+	if ff, ok := tp.t.translateFuncs[langKey]; ok && !ff.fromFile {
+		if languageCode := lang.LanguageCode(); languageCode != "" {
+			langKey = strings.ToLower(languageCode)
+		}
+	}
+
+	return tp.t.Func(langKey)
 }
 
 func errWithFileContext(inerr error, r *source.File) error {

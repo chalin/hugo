@@ -31,17 +31,28 @@ import (
 
 type translateFunc func(ctx context.Context, translationID string, templateData any) string
 
+type translateFuncAndFlag struct {
+	fn       translateFunc
+	fromFile bool
+}
+
 // Translator handles i18n translations.
 type Translator struct {
-	translateFuncs map[string]translateFunc
+	translateFuncs map[string]translateFuncAndFlag
 	cfg            config.AllProvider
 	logger         loggers.Logger
 }
 
 // NewTranslator creates a new Translator for the given language bundle and configuration.
-func NewTranslator(b *i18n.Bundle, cfg config.AllProvider, logger loggers.Logger) Translator {
-	t := Translator{cfg: cfg, logger: logger, translateFuncs: make(map[string]translateFunc)}
+func NewTranslator(b *i18n.Bundle, cfg config.AllProvider, logger loggers.Logger, setOfLangWithTransFile setOfLanguagesWithTranslationFile) Translator {
+	t := Translator{cfg: cfg, logger: logger, translateFuncs: make(map[string]translateFuncAndFlag)}
 	t.initFuncs(b)
+	for lang := range setOfLangWithTransFile {
+		if entry, ok := t.translateFuncs[lang]; ok {
+			entry.fromFile = true
+			t.translateFuncs[lang] = entry
+		}
+	}
 	return t
 }
 
@@ -49,11 +60,11 @@ func NewTranslator(b *i18n.Bundle, cfg config.AllProvider, logger loggers.Logger
 // configured language if not found.
 func (t Translator) Func(lang string) translateFunc {
 	if f, ok := t.translateFuncs[lang]; ok {
-		return f
+		return f.fn
 	}
 	t.logger.Infof("Translation func for language %v not found, use default.", lang)
 	if f, ok := t.translateFuncs[t.cfg.DefaultContentLanguage()]; ok {
-		return f
+		return f.fn
 	}
 
 	t.logger.Infoln("i18n not initialized; if you need string translations, check that you have a bundle in /i18n that matches the site language or the default language.")
@@ -70,7 +81,7 @@ func (t Translator) initFuncs(bndl *i18n.Bundle) {
 		// This may be pt-BR; make it case insensitive.
 		currentLangKey := strings.ToLower(strings.TrimPrefix(currentLangStr, artificialLangTagPrefix))
 		localizer := i18n.NewLocalizer(bndl, currentLangStr)
-		t.translateFuncs[currentLangKey] = func(ctx context.Context, translationID string, templateData any) string {
+		fn := func(ctx context.Context, translationID string, templateData any) string {
 			pluralCount := getPluralCount(templateData)
 
 			if templateData != nil {
@@ -129,6 +140,7 @@ func (t Translator) initFuncs(bndl *i18n.Bundle) {
 
 			return translated
 		}
+		t.translateFuncs[currentLangKey] = translateFuncAndFlag{fn: fn, fromFile: false}
 	}
 }
 
